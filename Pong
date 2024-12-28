@@ -1,245 +1,470 @@
 #include "raylib.h"
-#include<iostream>
+#include <iostream>
+#include <deque>
+#include<chrono>
+#include<thread>
 using namespace std;
 
-
+// Global variables
 int playerscore = 0;
 int AIscore = 0;
-//Declaring colors to be used in design using RGBA fomat
-Color VibrantBlue = Color{ 0,102,255,255 };
-Color RoyalBlue = Color{ 62,105,255,255 };
-Color SteelBlue = Color{ 70,130,180,255 };
-Color DodgerBlue = Color{ 30,144,255,255 };
+const int SCORE_LIMIT = 15;  // Set the score limit to 15
+
+// Declaring colors to be used in design using RGBA format
+Color VibrantBlue = Color{ 0, 102, 255, 255 };
+Color RoyalBlue = Color{ 62, 105, 255, 255 };
+Color SteelBlue = Color{ 70, 130, 180, 255 };
+Color DodgerBlue = Color{ 30, 144, 255, 255 };
+
+const int screenWidth = 1920;
+const int screenHeight = 1080;
+// Function to display the main menu and return the selected option
 
 
-class Ball {                                          //CLASS BALL
+void ShowWinnerMessage(int winner) {
+    while (!WindowShouldClose()) {
+        BeginDrawing();
+        ClearBackground(DARKBLUE);
+
+        if (winner == 1) {
+            DrawText("Player 1 Wins!", screenWidth / 2 - 150, screenHeight / 2 - 40, 50, WHITE);
+        }
+        else if (winner == 2) {
+            DrawText("Player 2 Wins!", screenWidth / 2 - 150, screenHeight / 2 - 40, 50, WHITE);
+        }
+        else if (winner == 0) {
+            DrawText("CPU Wins!", screenWidth / 2 - 150, screenHeight / 2 - 40, 50, WHITE);
+        }
+
+        DrawText("Press ENTER to continue...", screenWidth / 2 - 200, screenHeight / 2 + 50, 30, WHITE);
+        EndDrawing();
+
+        if (IsKeyPressed(KEY_ENTER)) {
+            break; // Exit the winner message loop
+        }
+    }
+}
+
+int ShowMainMenu() {
+    const char* menuOptions[] = { "Player vs CPU", "Player vs Player", "Exit" };
+    const int menuOptionsCount = sizeof(menuOptions) / sizeof(menuOptions[0]);
+    int selectedOption = 0;
+
+    Color backgroundColor = DARKBLUE;
+    Color activeColor = SKYBLUE;
+    Color inactiveColor = LIGHTGRAY;
+
+    while (!WindowShouldClose()) {
+        BeginDrawing();
+        ClearBackground(backgroundColor);
+
+        DrawText("Ping Pong Game", screenWidth / 2 - 200, 100, 50, WHITE);
+
+        for (int i = 0; i < menuOptionsCount; i++) {
+            Color optionColor = (i == selectedOption) ? activeColor : inactiveColor;
+            DrawText(
+                menuOptions[i],
+                screenWidth / 2 - 150,
+                250 + i * 100,
+                40,
+                optionColor
+            );
+        }
+
+        if (IsKeyPressed(KEY_DOWN)) {
+            selectedOption++;
+            if (selectedOption >= menuOptionsCount) selectedOption = 0;
+        }
+        if (IsKeyPressed(KEY_UP)) {
+            selectedOption--;
+            if (selectedOption < 0) selectedOption = menuOptionsCount - 1;
+        }
+
+        if (IsKeyPressed(KEY_ENTER)) {
+            return selectedOption;
+        }
+
+        EndDrawing();
+    }
+
+    return -1;
+}
+
+class Trail {
 public:
-	float x, y;    //X and Y coord of center
-	int xspeed, yspeed;   //x and y speed
-	int radius;        //radius of ball
-	void Draw() {               //Function for drawing the ball
-		DrawCircle(x, y, radius, WHITE);
-	}
-	void Update() {            //A function in class Ball to update the balls location using speed of ball
-		x = x + xspeed;
-		y = y + yspeed;
+    struct point {
+        float x, y;
+        float opacity;
+    };
 
-		if (y + radius >= GetScreenHeight() or y - radius <= 0) {        //Checking collision on top or bottom
-			yspeed = yspeed * -1;
-		}
-		if (x + radius >= GetScreenWidth()) {                //CPU WINS
-			AIscore = AIscore + 1;
-			ResetBall();                           //Resetting the ball
-		}
-		if (x - radius <= 0) {                        //PLAYER WINS
-			playerscore = playerscore + 1;
-			ResetBall();                        //Resetting the ball
-		}
-	}
-	void ResetBall() {                    //To reset the ball after player or AI scores
-		x = GetScreenWidth() / 2;
-		y = GetScreenHeight() / 2;
-		int speedchoices[2] = { -1,1 };
-		xspeed = xspeed * speedchoices[GetRandomValue(0, 1)];
-		yspeed = yspeed * speedchoices[GetRandomValue(0, 1)];
-	}
+    deque<point> points;
+    int maxTrailLength = 10;
+    float fadespeed = 0.1f;
+
+    void AddPoint(float x, float y) {
+        points.push_back({ x, y, 1.0f });
+
+        if (points.size() > maxTrailLength) {
+            points.pop_front();
+        }
+    }
+
+    void Update() {
+        // Decreasing the opacity of the farthest trail
+        for (auto& point : points) {
+            point.opacity -= fadespeed;
+        }
+
+        // Delete the points that are nearly at 100% faded
+        while (points.front().opacity <= 0.0f) {
+            points.pop_front();
+        }
+    }
+
+    void Draw() {
+        for (const auto& point : points) {
+            Color trailColor = Fade(WHITE, point.opacity);
+            DrawCircle(point.x, point.y, 10, trailColor);
+        }
+    }
 };
-Ball ball1;   //Creating an instance of the object Ball
+
+Trail ballTrail;
+
+class Impact {
+public:
+    float x, y;
+    float radius;
+    float maxRadius;
+    float growthSpeed;
+    bool active;
+
+    Impact() : x(0), y(0), radius(0), maxRadius(50), growthSpeed(5), active(false) {}
+
+    void Activate(float posX, float posY) {
+        x = posX;
+        y = posY;
+        radius = 0;
+        active = true;
+    }
+
+    void Update() {
+        if (active) {
+            radius += growthSpeed;
+            if (radius >= maxRadius) {
+                active = false; // Deactivate when animation completes
+            }
+        }
+    }
+
+    void Draw() {
+        if (active) {
+            Color impactColor = Fade(WHITE, 1.0f - (radius / maxRadius));
+            DrawCircle(x, y, radius, impactColor);
+        }
+    }
+};
+
+Impact paddleImpact;
+
+// Ball class
+class Ball {
+public:
+    float x, y;
+    int xspeed, yspeed;
+    int radius;
+    float elapsedTime;  // To track elapsed time
+
+    Ball() : elapsedTime(0.0f) {}  // Initialize elapsedTime
+
+    void Draw() {
+        ballTrail.Draw(); // Draw trail first
+        DrawCircle(x, y, radius, WHITE);
+    }
+
+    void Update() {
+
+        elapsedTime += GetFrameTime();
+
+        // Increase ball speed every 2 seconds
+        if (elapsedTime >= 5.0f and xspeed < 15 and yspeed < 15) {
+            xspeed += (xspeed > 0) ? 1 : -1;  // Increase speed in both x and y directions
+            yspeed += (yspeed > 0) ? 1 : -1;  // You can customize how to increase speed
+            elapsedTime = 0.0f;  // Reset elapsed time after increasing speed
+        }
+
+        // Update ball position
+        x += xspeed;
+        y += yspeed;
+
+        // Ball collision with top and bottom boundaries
+        if (y + radius >= GetScreenHeight() || y - radius <= 0) {
+            yspeed *= -1;
+        }
+        // Ball collision with left and right boundaries
+        if (x + radius >= GetScreenWidth()) {
+            AIscore++;
+            ResetBall();
+        }
+        if (x - radius <= 0) {
+            playerscore++;
+            ResetBall();
+        }
+
+        // Add current position to the trail
+        ballTrail.AddPoint(x, y);
+
+        // Update the trail
+        ballTrail.Update();
+    }
+
+    void ResetBall() {
+        x = GetScreenWidth() / 2;
+        y = GetScreenHeight() / 2;
+        int speedchoices[2] = { -1, 1 };
+        xspeed *= speedchoices[GetRandomValue(0, 1)];
+        yspeed *= speedchoices[GetRandomValue(0, 1)];
+
+        // Clear the trail on reset
+        ballTrail.points.clear();
+    }
+};
 
 
 
+Ball ball1;
 
-class Paddle1 {               //Create a class for the player and opponent AI paddle
+
+// Paddle class
+class Paddle {
 protected:
-	void(LimitMovement()) {                  //making a method of Limiting movement so that paddles stay within window
-		if (y <= 0) {
-			y = 0;                  //So that paddle does not go above window
-		}
-		if (y + height >= GetScreenHeight()) {
-			y = GetScreenHeight() - height;          //So that paddle does not go above window
-		}
-	}
+    void LimitMovement() {
+        if (y <= 0) {
+            y = 0;
+        }
+        if (y + height >= GetScreenHeight()) {
+            y = GetScreenHeight() - height;
+        }
+    }
 
 public:
-	float x, y;
-	float width, height;
-	int yspeed;                   //paddle will only have yspeed, not xspeed ofcourse
-	void Draw() {
-		DrawRectangleRounded(Rectangle{ x,y,width,height }, 0.8, 0, WHITE);
-	}
-	void Update() {
-		if (IsKeyDown(KEY_UP)) {
-			y = y - yspeed;        //We subtract y as y increases as we go down
-		}
-		if (IsKeyDown(KEY_DOWN)) {
-			y = y + yspeed;
-		}
-		LimitMovement();
-	}
+    float x, y;
+    float width, height;
+    int yspeed;
+
+    void Draw() {
+        DrawRectangleRounded(Rectangle{ x, y, width, height }, 0.8, 0, WHITE);
+    }
+
+    void Update() {
+        if (IsKeyDown(KEY_UP)) {
+            y -= yspeed;
+        }
+        if (IsKeyDown(KEY_DOWN)) {
+            y += yspeed;
+        }
+        LimitMovement();
+
+
+
+    }
 };
-Paddle1 player1;
 
 class Paddle2 {
 protected:
-	void(LimitMovement()) {                  //making a method of Limiting movement so that paddles stay within window
-		if (y <= 0) {
-			y = 0;                  //So that paddle does not go above window
-		}
-		if (y + height >= GetScreenHeight()) {
-			y = GetScreenHeight() - height;          //So that paddle does not go above window
-		}
-	}
+    void LimitMovement() {
+        if (y <= 0) {
+            y = 0;
+        }
+        if (y + height >= GetScreenHeight()) {
+            y = GetScreenHeight() - height;
+        }
+    }
 
 public:
-	float x, y;
-	float width, height;
-	int yspeed;                   //paddle will only have yspeed, not xspeed ofcourse
-	void Draw() {
-		DrawRectangleRounded(Rectangle{ x,y,width,height }, 0.8, 0, WHITE);
-	}
-	void Update() {
-		if (IsKeyDown(KEY_W)) {
-			y = y - yspeed;        //We subtract y as y increases as we go down
-		}
-		if (IsKeyDown(KEY_S)) {
-			y = y + yspeed;
-		}
-		LimitMovement();
-	}
+    float x, y;
+    float width, height;
+    int yspeed;
+
+    void Draw() {
+        DrawRectangleRounded(Rectangle{ x, y, width, height }, 0.8, 0, WHITE);
+    }
+
+    void Update() {
+        if (IsKeyDown(KEY_W)) {
+            y -= yspeed;
+        }
+        if (IsKeyDown(KEY_S)) {
+            y += yspeed;
+        }
+        LimitMovement();
+    }
 };
+
+Paddle player1;
 Paddle2 player2;
 
+// AI Paddle class
+class AIpaddle : public Paddle {
 
-class AIpaddle : public Paddle1 {          //Creates another class for AI paddle which INHERITS from paddle class
+    // To track elapsed time
 public:
-	void Update(int ball1_y) {
-		if (y + height / 2 > ball1_y) {
-			y = y - yspeed;
-		}
-		if (y + height / 2 <= ball1_y) {
-			y = y + yspeed;
-		}
-		LimitMovement();
-	}
+    void Update(int ball1_y) {
+        if (y + height / 2 > ball1_y) {
+            y -= yspeed;
+        }
+        if (y + height / 2 <= ball1_y) {
+            y += yspeed;
+        }
+        LimitMovement();
+
+        float elapsedTime = 0.0f;
+        elapsedTime += GetFrameTime();
+
+        // Increase ball speed every 2 seconds
+        if (elapsedTime >= 5.0f and yspeed < 15) {
+            yspeed += (yspeed > 0) ? 1 : -1;  // You can customize how to increase speed
+            elapsedTime = 0.0f;  // Reset elapsed time after increasing speed
+        }
+
+
+    }
 };
+
 AIpaddle AI;
-
-
-
-
 int main() {
-	int gamemode;
-	cout << "Enter 1 for P v CPU" << endl << "Enter 2 for P v P:" << endl;
-	cin >> gamemode;
+    InitWindow(screenWidth, screenHeight, "Ping Pong Game - Main Menu");
+    SetTargetFPS(60);
 
-	const int width = 1920;
-	const int height = 1080;
-	InitWindow(width, height, "My Ping Pong Game");           //Creating Game Window
-	SetTargetFPS(60);
+    int selectedOption = ShowMainMenu();
+    CloseWindow();
 
-	ball1.radius = 20;
-	ball1.x = width / 2;
-	ball1.y = height / 2;
-	ball1.xspeed = 8;
-	ball1.yspeed = 8;
+    if (selectedOption == 2 || selectedOption == -1) {
+        return 0;
+    }
 
-	player1.width = 25;
-	player1.height = 120;
-	player1.x = width - player1.width - 20;
-	player1.y = height / 2 - 60;                               //Aligning Player Paddle to right
-	player1.yspeed = 6;
+    InitWindow(screenWidth, screenHeight, "Ping Pong Game");
+    SetTargetFPS(60);
 
-	player2.width = 25;
-	player2.height = 120;
-	player2.x = player2.width;
-	player2.y = height / 2 - 60;
-	player2.yspeed = 6;
+    // Set up the ball and paddles (same initialization as before)...
+    ball1.radius = 20;
+    ball1.x = screenWidth / 2;
+    ball1.y = screenHeight / 2;
+    ball1.xspeed = 8;
+    ball1.yspeed = 8;
 
+    player1.width = 25;
+    player1.height = 120;
+    player1.x = screenWidth - player1.width - 20;
+    player1.y = screenHeight / 2 - 60;
+    player1.yspeed = 10;
 
-	AI.width = 25;
-	AI.height = 120;
-	AI.x = 10;
-	AI.y = height / 2 - AI.height / 2;
-	AI.yspeed = 6;
+    player2.width = 25;
+    player2.height = 120;
+    player2.x = player2.width;
+    player2.y = screenHeight / 2 - 60;
+    player2.yspeed = 10;
 
+    AI.width = 25;
+    AI.height = 120;
+    AI.x = 10;
+    AI.y = screenHeight / 2 - AI.height / 2;
+    AI.yspeed = 10;
 
-	if (gamemode == 1) {
-		while (WindowShouldClose() == false) {								//If ESC button is not pressed/GameLoop
-			BeginDrawing();
-			//Updating movements
-			ball1.Update();
-			player1.Update();
-			AI.Update(ball1.y);
+    if (selectedOption == 0) {
+        while (!WindowShouldClose()) {
+            BeginDrawing();
+            ball1.Update();
+            player1.Update();
+            AI.Update(ball1.y);
 
+            if (CheckCollisionCircleRec(Vector2{ ball1.x, ball1.y }, ball1.radius, Rectangle{ player1.x, player1.y, player1.width, player1.height })) {
+                ball1.xspeed *= -1;
+                paddleImpact.Activate(ball1.x, ball1.y);
+            }
+            if (CheckCollisionCircleRec(Vector2{ ball1.x, ball1.y }, ball1.radius, Rectangle{ AI.x, AI.y, AI.width, AI.height })) {
+                ball1.xspeed *= -1;
+                paddleImpact.Activate(ball1.x, ball1.y);
+            }
 
-			//Checking for collisions:
-			if (CheckCollisionCircleRec(Vector2{ ball1.x,ball1.y }, ball1.radius, Rectangle{ player1.x,player1.y,player1.width,player1.height })) {
-				ball1.xspeed = ball1.xspeed * -1;
-			}
-			if (CheckCollisionCircleRec(Vector2{ ball1.x,ball1.y }, ball1.radius, Rectangle{ AI.x,AI.y,AI.width,AI.height })) {
-				ball1.xspeed = ball1.xspeed * -1;
-			}
+            if (playerscore >= 8) {
+                ShowWinnerMessage(1);  // Player 1 wins
+                break;  // Exit the game loop
+            }
+            else if (AIscore >= 8) {
+                ShowWinnerMessage(0);  // CPU wins
+                break;  // Exit the game loop
+            }
+            else if (playerscore >= 8) {
+                ShowWinnerMessage(2);  // Player 2 wins
+                break;  // Exit the game loop
+            }
 
+            ClearBackground(DodgerBlue);
 
-			//Drawing 
-			ClearBackground(DodgerBlue);										//To remove traces and clear background for game update
-			DrawRectangle(width / 2, 0, width / 2, height, RoyalBlue);
-			DrawCircle(width / 2, height / 2, 150, SteelBlue);
-			ball1.Draw();                                               //Drawing the ball
-			player1.Draw();												//Drawing the player paddle
-			AI.Draw();                                                  //Drawing the AI paddle
-			DrawLine(width / 2, height, width / 2, 0, WHITE);           //Drawing a line to separate both sides
-			//Drawing the scores
-			DrawText(TextFormat("%i", AIscore), width / 4 - 20, 20, 80, WHITE);         //Using TextFormat as we have to write a variable, not a string
-			DrawText(TextFormat("%i", playerscore), 3 * width / 4 - 20, 20, 80, WHITE);
-			EndDrawing();
-		}
-		CloseWindow();
-	}
-	else if (gamemode == 2)
-	{
-		while (WindowShouldClose() == false) {								//If ESC button is not pressed/GameLoop
-			BeginDrawing();
-			//Updating movements
-			ball1.Update();
-			player1.Update();
-			player2.Update();
+            DrawRectangle(screenWidth / 2, 0, screenWidth / 2, screenHeight, RoyalBlue);
+            DrawCircle(screenWidth / 2, screenHeight / 2, 150, SteelBlue);
+            ball1.Draw();
+            player1.Draw();
+            AI.Draw();
+            paddleImpact.Update(); // Update impact animation
+            paddleImpact.Draw();   // Draw impact animation
+            DrawLine(screenWidth / 2, screenHeight, screenWidth / 2, 0, WHITE);
+            DrawText(TextFormat("%i", AIscore), screenWidth / 4 - 20, 20, 80, WHITE);
+            DrawText(TextFormat("%i", playerscore), 3 * screenWidth / 4 - 20, 20, 80, WHITE);
 
+            EndDrawing();
+        }
+    }
+    else if (selectedOption == 1) {
+        while (!WindowShouldClose()) {
+            BeginDrawing();
+            ball1.Update();
+            player1.Update();
+            player2.Update();
 
-			//Checking for collisions:
-			if (CheckCollisionCircleRec(Vector2{ ball1.x,ball1.y }, ball1.radius, Rectangle{ player1.x,player1.y,player1.width,player1.height })) {
-				ball1.xspeed = ball1.xspeed * -1;
-			}
-			if (CheckCollisionCircleRec(Vector2{ ball1.x,ball1.y }, ball1.radius, Rectangle{ player2.x,player2.y,player2.width,player2.height })) {
-				ball1.xspeed = ball1.xspeed * -1;
-			}
+            if (CheckCollisionCircleRec(Vector2{ ball1.x, ball1.y }, ball1.radius, Rectangle{ player1.x, player1.y, player1.width, player1.height })) {
+                ball1.xspeed *= -1;
+                paddleImpact.Activate(ball1.x, ball1.y);
+            }
+            if (CheckCollisionCircleRec(Vector2{ ball1.x, ball1.y }, ball1.radius, Rectangle{ player2.x, player2.y, player2.width, player2.height })) {
+                ball1.xspeed *= -1;
+                paddleImpact.Activate(ball1.x, ball1.y);
+            }
 
+            // Check if someone has won
 
-			//Drawing 
-			ClearBackground(DodgerBlue);										//To remove traces and clear background for game update
-			DrawRectangle(width / 2, 0, width / 2, height, RoyalBlue);
-			DrawCircle(width / 2, height / 2, 150, SteelBlue);
-			ball1.Draw();                                               //Drawing the ball
-			player2.Draw();												//Drawing the player paddle
-			player1.Draw();                                                  //Drawing the AI paddle
-			DrawLine(width / 2, height, width / 2, 0, WHITE);           //Drawing a line to separate both sides
-			//Drawing the scores
-			DrawText(TextFormat("%i", AIscore), width / 4 - 20, 20, 80, WHITE);         //Using TextFormat as we have to write a variable, not a string
-			DrawText(TextFormat("%i", playerscore), 3 * width / 4 - 20, 20, 80, WHITE);
-			EndDrawing();
-		}
-		CloseWindow();
+            if (playerscore >= 5) {
+                ShowWinnerMessage(1); 
+                break;// Player 1 wins
+                // Exit the game loop
+            }
+          
+            else if (AIscore >= 5) {
+                ShowWinnerMessage(2);
+                break;// Player 2 wins
+                // Exit the game loop
+            }
 
-	}
-	else
-	{
-		while (WindowShouldClose() == false)
-		{
-			ClearBackground(GRAY);
-			DrawText(TextFormat("No Game Mode was chosen, press ESC "), width / 32, 355, 40, BLACK);
-			DrawText(TextFormat("and run the program again."), width / 32, 390, 40, BLACK);
-			EndDrawing();
-		}
-		CloseWindow();
-	}
+            ClearBackground(DodgerBlue);
+            DrawText("Player 1: Use UP and DOWN keys", 20, screenHeight - 140, 20, WHITE);
+            DrawText("Player 2: Use W and S keys", 20, screenHeight - 100, 20, WHITE);
+
+            DrawRectangle(screenWidth / 2, 0, screenWidth / 2, screenHeight, RoyalBlue);
+            DrawCircle(screenWidth / 2, screenHeight / 2, 150, SteelBlue);
+            ball1.Draw();
+            player1.Draw();
+            player2.Draw();
+            paddleImpact.Update(); // Update impact animation
+            paddleImpact.Draw();   // Draw impact animation
+            DrawLine(screenWidth / 2, screenHeight, screenWidth / 2, 0, WHITE);
+            DrawText(TextFormat("%i", AIscore), screenWidth / 4 - 20, 20, 80, WHITE);
+            DrawText(TextFormat("%i", playerscore), 3 * screenWidth / 4 - 20, 20, 80, WHITE);
+
+            EndDrawing();
+        }
+    }
+
+    CloseWindow();
+    return 0;
 }
